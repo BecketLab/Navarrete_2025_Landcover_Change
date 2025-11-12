@@ -1,0 +1,683 @@
+---
+title: "Soil Paper Figures"
+author: "Josue Navarrete"
+date: "2024-11-08"
+output:   rmdformats::readthedown
+---
+
+# Loading Required Libraries 
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(phyloseq)
+library(zCompositions)
+library(vegan)
+library(ggforce)
+library(ggpicrust2)
+library(ggvegan)
+library(microbiome)
+library(scales)
+library(RColorBrewer)
+library(pheatmap)
+library(microeco)
+library(gridExtra)
+library(cowplot)
+```
+
+
+
+# Taxanomic Analysis
+## Load Data
+```{r}
+samdf <- read.delim("~/BecketLab_R/Soil/Soil Paper/soil_metadata_2.txt", sep = "\t", header = T, stringsAsFactors=FALSE)
+load("~/BecketLab_R/Soil/Soil Paper/Singlem_df.RData")
+```
+
+
+
+## Create Phyloseq Object
+```{r}
+# Convert singlem into phyloseq object 
+abundance_data <- joined_data[, 1:40]
+taxonomy_data <- joined_data[, c("Root", "Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")]
+
+rownames(samdf) <- colnames(abundance_data)
+
+s_ps <- phyloseq(
+  otu_table(as.matrix(abundance_data), taxa_are_rows = TRUE),
+  tax_table(as.matrix(taxonomy_data)),
+  sample_data(samdf)
+)
+
+```
+
+
+
+## Create Microtable object (microeco)
+```{r}
+tidy_taxa <- tidy_taxonomy(
+  taxonomy_data
+)
+soil_microtable <- microtable$new(
+  abundance_data,
+  sample_table = samdf,
+  tax_table = tidy_taxa,
+  phylo_tree = NULL,
+  rep_fasta = NULL,
+  auto_tidy = FALSE
+)
+```
+
+## Compositional Bar Chart: Phylum
+```{r,warning = FALSE,message=FALSE,fig.width= 15, fig.height=8}
+# Phylum
+t1 <- trans_abund$new(dataset = soil_microtable, taxrank = "Phylum", ntaxa = 10)
+t1$data_abund$Land.cov <- factor(t1$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+# Class
+t2 <- trans_abund$new(dataset = soil_microtable, taxrank = "Class", ntaxa = 15)
+t2$data_abund$Land.cov <- factor(t2$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+# Genus
+t3 <- trans_abund$new(dataset = soil_microtable, taxrank = "Family", ntaxa = 25)
+t3$data_abund$Land.cov <- factor(t3$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+
+
+
+
+
+
+#################
+
+g1 <- t1$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 12))
+g1
+
+g2 <- t2$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 12))
+g2
+
+g3 <- t3$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 12)) + guides(fill=guide_legend(ncol=1,title = "Family"))
+g3
+
+
+plot_grid(g1, g2, g3, ncol = 1, align = 'v', labels = "AUTO")
+#ggsave("~/BecketLab_R/Soil/Profiling/data/taxa_compositional_bar.svg", width = 15, height = 20, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_compositional_bar.svg", width = 15, height = 20, limitsize = FALSE)
+```
+
+## Species: Alpha Diversity
+```{r, fig.width= 10, fig.height=10}
+s_ps@sam_data$Land.cov <- factor(s_ps@sam_data$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+
+plot_richness(s_ps, x = "Land.cov", measures = c("Shannon", "Simpson"))+
+  geom_boxplot(fill = "white", color = "black") +
+  geom_point(aes(color = factor(site_id))) +
+  geom_jitter(aes(color = factor(site_id))) + 
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+  ) 
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_alpha.pdf", width = 6, height = 8, limitsize = FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_alpha.svg", width = 6, height = 8, limitsize = FALSE)
+
+```
+
+
+
+
+## Beta diversity Preprocessing - Species
+```{r, message=FALSE, warning=FALSE, results='hide'}
+otu_z <- cmultRepl(as.matrix(s_ps@otu_table), method = "GBM", output = 'p-counts', z.warning = 0.99)
+
+#create clr function
+clr <- function(x) sweep(log(x), 1, rowMeans(log(x)), "-")
+
+#Transpose OTU tables
+otu_tx <- data.frame(t(clr(t(otu_z))))
+
+#To matrix
+otu_m <- as.matrix(t(otu_tx))
+
+######################### Make and extract NMDS scores 
+nmds = metaMDS(otu_m, distance = "euclidean")
+nmds_scores = as.data.frame(nmds$points)
+
+nmds_scores$pH <- samdf$pH
+nmds_scores$Soil_H20 <- samdf$Soil_H2O
+nmds_scores$Bulk.D <- samdf$Bulk.D
+nmds_scores$NO3 <- samdf$NO3
+nmds_scores$NH4 <- samdf$NH4
+nmds_scores$LOI <- samdf$LOI
+nmds_scores$N <- samdf$N....
+nmds_scores$C <- samdf$C....
+nmds_scores$site_id <- samdf$site_id
+nmds_scores$soil_type <- samdf$Land.cov
+
+#nmds_scores$Samples <- samples.out
+colnames(nmds_scores) <- c("NMDS1", "NMDS2", "pH", "Soil_H20", "Bulk.D", "NO3", "NH4", "LOI", "N", "C", "site_id", "soil_type")
+```
+
+
+
+## Plot Beta
+```{r, fig.width= 8, fig.height=8}
+nmds_scores$soil_type <- factor(nmds_scores$soil_type, levels = c("C","O","A", "L", "IC", "IA"))
+
+beta_plot <- ggplot(data = nmds_scores) +
+  ggtitle("Beta-diversity by Soil Type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_mark_ellipse(aes(x=NMDS1,y=NMDS2,fill= soil_type, color= soil_type), expand = unit(0.5,"mm")) +
+  geom_point(aes(x=NMDS1, y=NMDS2, shape = soil_type)) +
+  labs(fill = "Land Cover Type", shape = "Land Cover Type", color = "Land Cover Type")
+
+beta_plot
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_beta.pdf", width = 8, height = 5, limitsize = FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_beta.svg", width = 8, height = 5, limitsize = FALSE)
+```
+
+## Beta Stats (Anosim + PERMANOVA + Betadisper)
+```{r}
+anosim(otu_m, samdf$Land.cov, distance = "euclidean", permutations = 999)
+
+adonis2(formula = otu_m ~ samdf$Land.cov, permutations = 999, method = "euclidean")
+
+```
+
+## Betadisper
+```{r}
+bray_dist <- distance(s_ps, "euclidean")
+group_by <- sample_data(s_ps)$Land.cov # Assuming you have a column named "Group"
+disper <- betadisper(bray_dist, group_by)
+permutest(disper, pairwise = TRUE)
+
+
+```
+
+
+
+## CCA Preprocessing - species
+```{r}
+# CCA requires two dataframes:
+# 1st main Data (rows: samples columns: factors[phylum or OTU]) 
+# 2nd Driver of the dataset ex. any continuous counts (rain.Inches)
+
+# subset the data to only preserve main data ONLY
+# create a list of colnames bc rmd 
+cca_driver <- subset(nmds_scores, select = c("pH", "Soil_H20", "Bulk.D", "NO3", "NH4", "LOI", "N", "C"))
+data_ps <- data.frame(t(s_ps@otu_table))
+cca_ps <- cca(data_ps, cca_driver)
+
+#plot(cca_ps)
+fort_cca <- fortify(cca_ps)
+# sites and biplot 
+
+sites <- which(fort_cca$score == "sites")
+biplot <- which(fort_cca$score == "biplot")
+
+fort_cca1 <- fort_cca[sites,]
+drivers <- fort_cca[biplot,]
+
+gg_soil_cca <- cbind(fort_cca1, subset(samdf, select = c("Land.cov")))
+```
+
+
+
+## Plot CCA - species
+```{r, fig.width= 8, fig.height=8}
+gg_soil_cca$Land.cov <- factor(gg_soil_cca$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+
+cca_gg <- ggplot(gg_soil_cca) +
+  ggtitle("CCA1 vs CCA2") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_point(aes(x = CCA1, y = CCA2 , color = factor(Land.cov), shape = Land.cov)) +
+  geom_segment(data = drivers, aes(x = 0, y = 0, xend = 3*CCA1, yend = 3*CCA2), arrow = arrow(length = unit(0.1, "cm")), linewidth =0.5) +
+  geom_text(data = drivers, aes(x = 3.3*CCA1, y = 3.3*CCA2, label = label)) +
+  labs(color = "Land Cover Type", shape = "Land Cover Type")
+
+cca_gg
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_cca.pdf", width = 8, height = 5, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_cca.svg", width = 8, height = 5, limitsize = FALSE)
+```
+
+
+## LEfSe
+```{r, warning=FALSE,message=FALSE, fig.width= 10, fig.height=15}
+default_colors <- scales::hue_pal()(6)
+
+t1 <- trans_diff$new(dataset = soil_microtable, method = "lefse", group = "Land.cov")
+g1 <- t1$plot_diff_bar(color_values = default_colors,use_number = 1:20)
+
+
+g1$labels$colour <- "Land Cover Type"
+g1$labels$fill <- "Land Cover Type"
+g1$labels$group <- "Land Cover Type"
+
+
+g2 <- t1$plot_diff_abund(color_values = default_colors,use_number = 1:20,  add_sig = TRUE)
+g2 <- g2 + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.border = element_blank())
+
+g2$labels$colour <- "Land Cover Type"
+p <- g1 %>% aplot::insert_right(g2, width=3)
+p
+
+
+
+g1 <- g1 + theme(text=element_text(size=18), axis.text.y = element_text(size = 20))
+g2 <- g2 + theme(text=element_text(size=18), axis.text = element_text(size = 12))
+
+p <- g1 %>% aplot::insert_right(g2, width=5)
+p
+
+## Save the lefse table
+lefse_res <- t1[["res_diff"]]
+row.names(lefse_res) <- NULL
+
+#write.csv(lefse_res,file='/Users/josuenavarrete/BecketLab_R/Soil/Soil Paper/lefse_results.csv', row.names=FALSE)
+
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_lefse.pdf", width = 20, height = 15, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_lefse.svg", width = 20, height = 15, limitsize = FALSE)
+```
+
+
+
+## Pearson Correlation
+```{r, warning=FALSE,message=FALSE, fig.width= 10, fig.height=5}
+#Store Lefse taxa
+lefse_taxa <- t1$plot_diff_bar_taxa
+
+t2 <- trans_diff$new(dataset = soil_microtable, method = "lefse", group = "Land.cov", taxa_level = "all")
+# then create trans_env object
+t1 <- trans_env$new(dataset = soil_microtable, add_data = soil_microtable$sample_table[,c(2:9)])
+
+
+
+############ Testing
+test <- data.frame(t2$res_diff$Taxa)
+  
+
+
+
+if (any(grepl("\\..__", test$t2.res_diff.Taxa))) {
+            test$t2.res_diff.Taxa %<>% gsub(".*(.__.*?$)", "\\1", .)
+        } else {
+            test$t2.res_diff.Taxa %<>% gsub(".*\\|", "", .)
+        }
+
+
+filter(test, t2.res_diff.Taxa %in% lefse_taxa)  
+lefse_rows <- which(test$t2.res_diff.Taxa %in% lefse_taxa)
+test[lefse_rows,]
+
+###############
+
+# use other_taxa to select taxa you need
+t1$cal_cor(use_data = "other", p_adjust_method = "fdr", other_taxa = t2$res_diff$Taxa[lefse_rows])
+
+
+
+cor_lefse_heatmap <- t1$plot_cor(pheatmap = FALSE)
+
+cor_lefse_heatmap
+### Store as table
+cor_heatmap_table <- cor_lefse_heatmap$data
+#write.csv(cor_heatmap_table,file='/Users/josuenavarrete/BecketLab_R/Soil/Soil Paper/cor_heat_results.csv', row.names=FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_pearsonCor.pdf", width = 10, height = 5, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/taxa_pearsonCor.svg", width = 10, height = 5, limitsize = FALSE)
+```
+## Testing
+```{r}
+#t1$cal_cor(use_data = "other", p_adjust_method = "fdr", other_taxa = t2$res_diff$Taxa[1:10])
+
+#t1$plot_cor(pheatmap = FALSE)
+```
+
+# Functional Analysis
+
+
+## Load Data 
+```{r}
+load("~/BecketLab_R/Soil/Functional/2023/kegg_funprofiler_df.RData")
+```
+
+
+## Create Phyloseq Object
+```{r}
+# Build a phyloseq object 
+brite_abudance_table <- data.frame(funprofiler_data_wpathways[,2:41])
+brite_taxa_df <- as.matrix(funprofiler_data_wpathways[,c(46,45,44)])
+row.names(samdf) <- colnames(brite_abudance_table)
+
+brite_ps <- phyloseq(
+  otu_table(as.matrix(brite_abudance_table), taxa_are_rows = TRUE),
+  tax_table(as.matrix(brite_taxa_df)),
+  sample_data(samdf)
+)
+```
+
+
+## Create Microtable Object
+```{r}
+soil_func_microtable <- microtable$new(
+  brite_abudance_table,
+  sample_table = samdf,
+  tax_table = data.frame(brite_taxa_df),
+  phylo_tree = NULL,
+  rep_fasta = NULL,
+  auto_tidy = TRUE
+)
+```
+
+
+## Composititional Bar Chart
+```{r,warning = FALSE,message=FALSE,fig.width= 15, fig.height=8}
+# A Level
+t3 <- trans_abund$new(dataset = soil_func_microtable, taxrank = "A", ntaxa = 10)
+t3$data_abund$Land.cov <- factor(t3$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+# B Level
+t4 <- trans_abund$new(dataset = soil_func_microtable, taxrank = "B", ntaxa = 10)
+t4$data_abund$Land.cov <- factor(t4$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+# C Level
+t5 <- trans_abund$new(dataset = soil_func_microtable, taxrank = "kegg_pathway_name", ntaxa = 30)
+t5$data_abund$Land.cov <- factor(t5$data_abund$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+
+
+t3 <- t3$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 12))
+
+t4 <- t4$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 10))
+
+t5 <- t5$plot_bar(bar_full = TRUE, others_color = "grey70", facet = "Land.cov",legend_text_italic = FALSE,clustering = TRUE,  x_axis_name = "site_id", color_values = RColorBrewer::brewer.pal(10, "Paired")) + theme_classic() + theme(text=element_text(size=18), axis.text = element_text(size = 12))
+
+t5
+
+plot_grid(t3, t4, t5, ncol = 1, align = 'v', labels = "AUTO")
+
+t3
+t4
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_compositional_B_bar.svg", width = 15, height = 11, limitsize = FALSE)
+```
+
+
+## Pathway Alpha Diversity
+```{r, warning=FALSE, message=FALSE, fig.width= 8, fig.height=8}
+brite_ps@sam_data$Land.cov <- factor(brite_ps@sam_data$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+
+plot_richness(brite_ps, x = "Land.cov", measures = c("Shannon", "Simpson"))+
+  geom_boxplot(fill = "white", color = "black") +
+  geom_point(aes(color = factor(site_id))) +
+  geom_jitter(aes(color = factor(site_id))) + 
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+  ) 
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_alpha.pdf", width = 6, height = 8, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_alpha.svg", width = 6, height = 8, limitsize = FALSE)
+```
+
+
+## Beta diversity Processing
+```{r, message=FALSE,warning=FALSE,results='hide'}
+otu_z<- cmultRepl(as.matrix(brite_ps@otu_table), method = "GBM", output = 'p-counts', z.warning = 0.99)
+
+#create clr function
+clr <- function(x) sweep(log(x), 1, rowMeans(log(x)), "-")
+
+#Transpose OTU tables
+otu_tx <- data.frame(t(clr(t(otu_z))))
+
+#To matrix
+otu_m <- as.matrix(t(otu_tx))
+
+######################### Make and extract NMDS scores 
+nmds = metaMDS(otu_m, distance = "euclidean")
+nmds_scores = as.data.frame(nmds$points)
+
+nmds_scores$pH <- samdf$pH
+nmds_scores$Soil_H20 <- samdf$Soil_H2O
+nmds_scores$Bulk.D <- samdf$Bulk.D
+nmds_scores$NO3 <- samdf$NO3
+nmds_scores$NH4 <- samdf$NH4
+nmds_scores$LOI <- samdf$LOI
+nmds_scores$N <- samdf$N....
+nmds_scores$C <- samdf$C....
+nmds_scores$site_id <- samdf$site_id
+nmds_scores$soil_type <- samdf$Land.cov
+
+
+colnames(nmds_scores) <- c("NMDS1", "NMDS2", "pH", "Soil_H20", "Bulk.D", "NO3", "NH4", "LOI", "N", "C", "site_id", "soil_type")
+
+
+nmds_scores$soil_type <- factor(nmds_scores$soil_type, levels = c("C","O","A", "L", "IC", "IA"))
+```
+
+
+
+## Plot Beta
+```{r,fig.width= 8, fig.height=8}
+beta_plot_brite <- ggplot(data = nmds_scores) +
+  ggtitle("Beta-diversity by Soil Type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_mark_ellipse(aes(x=NMDS1,y=NMDS2,fill= soil_type, color= soil_type), expand = unit(0.5,"mm")) +
+  geom_point(aes(x=NMDS1, y=NMDS2, shape = soil_type)) +
+  labs(fill = "Land Cover Type", shape = "Land Cover Type", color = "Land Cover Type")
+
+beta_plot_brite
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_beta.pdf", width = 8, height = 5, limitsize = FALSE)
+ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_beta.svg", width = 8, height = 5, limitsize = FALSE)
+```
+
+## Beta Stats (Anosim + PERMANOVA)
+```{r}
+anosim(otu_m, samdf$Land.cov, distance = "euclidean", permutations = 99)
+
+adonis2(formula = otu_m ~ samdf$Land.cov, permutations = 99, method = "euclidean")
+
+```
+
+## CCA Preprocessing 
+```{r}
+cca_driver <- subset(nmds_scores, select = c("pH", "Soil_H20", "Bulk.D", "NO3", "NH4", "LOI", "N", "C"))
+data_ps <- data.frame(t(brite_ps@otu_table))
+cca_ps <- cca(data_ps, cca_driver)
+
+#plot(cca_ps)
+fort_cca <- fortify(cca_ps)
+
+sites <- which(fort_cca$score == "sites")
+biplot <- which(fort_cca$score == "biplot")
+
+fort_cca1 <- fort_cca[sites,]
+drivers <- fort_cca[biplot,]
+
+gg_soil_cca <- cbind(fort_cca1, subset(samdf, select = c("Land.cov")))
+
+##
+gg_soil_cca$Land.cov <- factor(gg_soil_cca$Land.cov, levels = c("C","O","A", "L", "IC", "IA"))
+```
+
+
+## Plot CCA - Pathways
+```{r, fig.width= 8, fig.height=8}
+cca_gg <- ggplot(gg_soil_cca) +
+  ggtitle("CCA1 vs CCA2") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_point(aes(x = CCA1, y = CCA2 , color = factor(Land.cov), shape = Land.cov)) +
+  geom_segment(data = drivers, aes(x = 0, y = 0, xend = 3*CCA1, yend = 3*CCA2), arrow = arrow(length = unit(0.1, "cm")), linewidth =0.5) +
+  geom_text(data = drivers, aes(x = 3.3*CCA1, y = 3.3*CCA2, label = label)) +
+  labs(color = "Land Cover Type", shape = "Land Cover Type")
+
+cca_gg
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_cca.pdf", width = 8, height = 5, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_cca.svg", width = 8, height = 5, limitsize = FALSE)
+```
+
+
+## LEfse 
+```{r, warning=FALSE,message=FALSE, fig.width= 10, fig.height=10}
+default_colors <- scales::hue_pal()(6)
+
+
+cust_default_colors <- default_colors[c(1,2,4)]
+soil_t1 <- trans_diff$new(dataset = soil_func_microtable, method = "lefse", group = "Land.cov", taxa_level = "kegg_pathway_name")
+soil_t1$res_diff$Group <- factor(soil_t1$res_diff$Group, levels = c("C","O","A", "L", "IC", "IA"))
+
+soil_g1 <- soil_t1$plot_diff_bar(color_values = cust_default_colors)
+soil_g1$labels$colour <- "Land Cover Type"
+soil_g1$labels$fill <- "Land Cover Type"
+soil_g1$labels$group <- "Land Cover Type"
+
+
+soil_g2 <- soil_t1$plot_diff_abund(color_values = default_colors)
+
+soil_g2 <- soil_g2 + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), panel.border = element_blank())
+soil_g2$labels$colour <- "Land Cover Type"
+
+
+
+soil_g1 <- soil_g1 + theme(axis.text.y = element_text(size = 20))
+soil_g2 <- soil_g2 
+
+soil_p <- soil_g1 %>% aplot::insert_right(soil_g2, width=3)
+soil_p
+
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_lefse.svg", width = 15, height = 10, limitsize = FALSE)
+```
+
+
+
+## Pearson Correlation
+```{r, warning=FALSE,message=FALSE, fig.width= 10, fig.height=5}
+soil_t2 <- trans_diff$new(dataset = soil_func_microtable, method = "lefse", group = "Land.cov", taxa_level = "kegg_pathway_name")
+# then create trans_env object
+soil_t1 <- trans_env$new(dataset = soil_func_microtable, add_data = soil_func_microtable$sample_table[,c(2:9)])
+# use other_taxa to select taxa you need
+soil_t1$cal_cor(use_data = "other", p_adjust_method = "fdr", other_taxa = soil_t2$res_diff$Taxa[1:40])
+
+soil_t1$plot_cor(pheatmap = FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_pearsonCor.pdf", width = 10, height = 5, limitsize = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/func_pearsonCor.svg", width = 10, height = 5, limitsize = FALSE)
+```
+
+
+
+# Additional Stats/Figures
+## Taxa: Alpha Kruskal Wallis Pairwise Comparison Testing
+```{r}
+# Step 1: Extract richness data
+richness_df <- estimate_richness(s_ps, measures = c("Shannon", "Simpson"))
+richness_df$Land.cov <- sample_data(s_ps)$Land.cov
+
+# Step 2: Perform Kruskal-Wallis test
+kruskal_result_shan <- kruskal.test(Shannon ~ Land.cov, data = richness_df)
+kruskal_result_simp <- kruskal.test(Simpson ~ Land.cov, data = richness_df)
+print(kruskal_result_shan)
+print(kruskal_result_simp)
+# Step 3: Perform pairwise Wilcoxon test (equivalent to pairwise Kruskal-Wallis)
+pairwise_test <- pairwise.wilcox.test(
+    richness_df$Shannon,
+    richness_df$Land.cov,
+    p.adjust.method = "BH"    # Benjamini-Hochberg correction for multiple testing
+)
+
+pairwise_test2 <- pairwise.wilcox.test(
+    richness_df$Simpson,
+    richness_df$Land.cov,
+    p.adjust.method = "BH"    # Benjamini-Hochberg correction for multiple testing
+)
+print(pairwise_test)
+print(pairwise_test2)
+```
+
+
+## Func: Alpha Kruskal Wallis Pairwise Comparison Testing
+```{r, warning=FALSE}
+# Step 1: Extract richness data
+richness_df <- estimate_richness(brite_ps, measures = c("Shannon", "Simpson"))
+richness_df$Land.cov <- sample_data(brite_ps)$Land.cov
+
+# Step 2: Perform Kruskal-Wallis test
+kruskal_result_shan <- kruskal.test(Shannon ~ Land.cov, data = richness_df)
+kruskal_result_simp <- kruskal.test(Simpson ~ Land.cov, data = richness_df)
+print(kruskal_result_shan)
+print(kruskal_result_simp)
+# Step 3: Perform pairwise Wilcoxon test (equivalent to pairwise Kruskal-Wallis)
+pairwise_test <- pairwise.wilcox.test(
+    richness_df$Shannon,
+    richness_df$Land.cov,
+    p.adjust.method = "BH"    # Benjamini-Hochberg correction for multiple testing
+)
+
+pairwise_test2 <- pairwise.wilcox.test(
+    richness_df$Simpson,
+    richness_df$Land.cov,
+    p.adjust.method = "BH"    # Benjamini-Hochberg correction for multiple testing
+)
+print(pairwise_test)
+print(pairwise_test2)
+```
+
+
+## Taxa: Pearson Correlation grouped by Land Cover Type
+```{r, warning=FALSE,message=FALSE, fig.width= 15, fig.height=5}
+t2 <- trans_diff$new(dataset = soil_microtable, method = "lefse", group = "Land.cov", taxa_level = "Phylum")
+# then create trans_env object
+t1 <- trans_env$new(dataset = soil_microtable, add_data = soil_microtable$sample_table[,c(2:9)])
+# use other_taxa to select taxa you need
+t1$cal_cor(by_group = "Land.cov",use_data = "other", p_adjust_method = "fdr", other_taxa = t2$res_diff$Taxa[1:40])
+t1$res_cor$by_group <- factor(t1$res_cor$by_group, levels = c("C","O","A", "L", "IC", "IA"))
+
+t1$plot_cor(pheatmap = FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/sup_taxa_pearsonCor.pdf", width = 20, height = 10, limitsize = FALSE)
+```
+
+## Func: Pearson Correlation grouped by Land Cover Type
+```{r, warning=FALSE,message=FALSE, fig.width= 15, fig.height=5}
+soil_t2 <- trans_diff$new(dataset = soil_func_microtable, method = "lefse", group = "Land.cov", taxa_level = "kegg_pathway_name")
+# then create trans_env object
+soil_t1 <- trans_env$new(dataset = soil_func_microtable, add_data = soil_func_microtable$sample_table[,c(2:9)])
+# use other_taxa to select taxa you need
+soil_t1$cal_cor(by_group = "Land.cov",use_data = "other", p_adjust_method = "fdr", other_taxa = soil_t2$res_diff$Taxa[1:40])
+soil_t1$res_cor$by_group <- factor(soil_t1$res_cor$by_group, levels = c("C","O","A", "L", "IC", "IA"))
+
+soil_t1$plot_cor(pheatmap = FALSE)
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/sup_func_pearsonCor.pdf", width = 20, height = 10, limitsize = FALSE)
+```
+
+## Feature Importance: Taxanomic Metadata - Land Cover Type
+```{r, warning=FALSE,message=FALSE}
+set.seed(145)
+soil_t1 <- trans_env$new(dataset = soil_microtable, add_data = soil_microtable$sample_table[,c(2:9)])
+soil_tmp <- soil_t1$data_env %>% t %>% as.data.frame
+# caret package should be installed
+soil_t2 <- trans_classifier$new(dataset = soil_microtable, x.predictors = soil_tmp, y.response = "Land.cov")
+soil_t2$cal_preProcess(method = c("center", "scale", "nzv"))
+# All samples are used in training if cal_split function is not performed
+soil_t2$cal_train(method = "rf")
+
+# generate significance with rfPermute package
+# require rfPermute package to be installed
+soil_t2$cal_feature_imp(rf_feature_sig = TRUE)
+
+soil_t2$plot_feature_imp(show_sig_group = TRUE, coord_flip = TRUE, width = 0.6, add_sig = TRUE)
+
+rf_data <- soil_t2$plot_feature_imp(show_sig_group = TRUE, coord_flip = TRUE, width = 0.6, add_sig = TRUE)
+
+
+#write.csv(rf_data$data,file='~/BecketLab_R/Soil/Soil Paper/output/sup_taxa_meta_randomforest.csv', row.names=FALSE)
+
+#ggsave("~/BecketLab_R/Soil/Soil Paper/output/sup_taxa_meta_randomforest.svg", width = 10, height = 10, limitsize = FALSE)
+```
+
+
+
+
+
+
+
