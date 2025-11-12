@@ -18,7 +18,7 @@ samdf <- read.delim("~/BecketLab_R/Soil/Profiling/data/soil_metadata_2.txt",
                     header = T, 
                     stringsAsFactors=FALSE)
 
-# Get a list of all .sf files in the directory
+# Get a list of all SingleM profile output files files in the directory
 file_list <- list.files("~/BecketLab_R/Soil/Profiling/data/singleM/profile.tsv/",pattern="\\_profile.tsv$")
 
 # Use purrr::map() to read all files into a list of dataframes
